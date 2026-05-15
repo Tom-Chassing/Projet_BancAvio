@@ -98,16 +98,26 @@ int main(void)
   MX_USART2_UART_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-  int status = BME280_Config (OSRS_2, OSRS_16, OSRS_OFF, MODE_NORMAL, T_SB_0p5, IIR_16);
+  int status = BME280_Config (OSRS_2, OSRS_16, MODE_NORMAL, T_SB_0p5, IIR_16);
   if (status!= 0)
     {
   	  Error_Handler();
     }
+
   BME280_WakeUP();
   float temp=0;
   float press=0;
-  float hum=0;
-  BME280_Measure(&temp,&press,&hum);
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+  BME280_Measure(&temp,&press);
 
   char mess[100];
   sprintf(mess, "T: %.2f C, P: %.2f hPa \r\n", temp, press);
@@ -124,20 +134,10 @@ int main(void)
   ssd1306_SetCursor(2, 10);
   char strPress[20];
   sprintf(strPress, "P: %.2f hPa", press);
-  ssd1306_WriteString(strTemp, Font_7x10, White);
+  ssd1306_WriteString(strPress, Font_7x10, White);
 
   ssd1306_UpdateScreen();
-
-  /* USER CODE END 2 */
-
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-
+  HAL_Delay(2000);
   }
   /* USER CODE END 3 */
 }

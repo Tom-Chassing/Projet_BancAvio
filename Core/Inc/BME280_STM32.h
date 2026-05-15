@@ -4,6 +4,7 @@
  *  Created on: 16 avr. 2026
  *      Author: math
  *      librairie de gestion du bme 280
+ *      modifié par Tom car le capteur est un BMP et non un BME 280
  */
 
 #ifndef BME280_STM32_H_
@@ -16,7 +17,8 @@
 #define SUPPORT_64BIT 1
 //#define SUPPORT_32BIT 1
 
-#define BME280_ADDRESS 0xEC// SDIO is grounded, the 7 bit address is 0x76 and 8 bit address = 0x76<<1 = 0xEC
+#define BME280_ADDRESS 0xEE //SDIO is grounded, the 7 bit address is 0x76 and 8 bit address = 0x76<<1 = 0xEC
+// J'ai eu besoin de l'IA, mais le commentaire précédent est faux, le SDIO est à VCC, donc l'adresse 7 bits est 0x77 et l'adresse 8 bits est 0xEE !
 
 
 extern I2C_HandleTypeDef BME280_I2C;
@@ -43,17 +45,17 @@ extern I2C_HandleTypeDef BME280_I2C;
  */
 
 
-int BME280_Config (uint8_t osrs_t, uint8_t osrs_p, uint8_t osrs_h, uint8_t mode, uint8_t t_sb, uint8_t filter);
+int BME280_Config (uint8_t osrs_t, uint8_t osrs_p, uint8_t mode, uint8_t t_sb, uint8_t filter);
 
 /* To be used when doing the force measurement
  * the Device need to be put in forced mode every time the measurement is needed
  */
 void BME280_WakeUP(void);
 
-/* measure the temp, pressure and humidity
+/* measure the temp and pressure
  * the values will be stored in the parameters passed to the function
  */
-void BME280_Measure(float *temperature, float *pressure, float *humidity);
+void BME280_Measure(float *temperature, float *pressure);
 
 
 // Oversampling definitions
@@ -90,7 +92,7 @@ void BME280_Measure(float *temperature, float *pressure, float *humidity);
 // REGISTERS DEFINITIONS
 #define ID_REG      	0xD0
 #define RESET_REG  		0xE0
-#define CTRL_HUM_REG    0xF2
+// #define CTRL_HUM_REG    0xF2         // not used as the humidity is not measured in this project
 #define STATUS_REG      0xF3
 #define CTRL_MEAS_REG   0xF4
 #define CONFIG_REG      0xF5

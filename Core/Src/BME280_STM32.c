@@ -3,7 +3,7 @@
  *
  *  Created on: 16 avr. 2026
  *      Author: math but sources by ControllersTech.com
- *      modifié par math car le capteur est un BMP et non un BME 280
+ *      modifié par Tom car le capteur est un BMP et non un BME 280
  */
 
 
@@ -14,18 +14,14 @@ static int BMEReadRaw(void);
 static int32_t BME280_compensate_T_int32(int32_t adc_T);
 static uint32_t BME280_compensate_P_int64(int32_t adc_P);
 static uint32_t BME280_compensate_P_int32(int32_t adc_P);
-static uint32_t bme280_compensate_H_int32(int32_t adc_H);
+// Humidity compensation function intentionally omitted: not supported on BMP280
 
 uint8_t TrimParam[36];
-int32_t tRaw, pRaw, hRaw;
+int32_t tRaw, pRaw;
 
-uint16_t dig_T1,  \
-         dig_P1, \
-         dig_H1, dig_H3;
+uint16_t dig_T1, dig_P1;
 
-int16_t  dig_T2, dig_T3, \
-         dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9, \
-		 dig_H2,  dig_H4, dig_H5, dig_H6;
+int16_t  dig_T2, dig_T3, dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9;
 
 int32_t t_fine;
 uint8_t chipID;
@@ -51,7 +47,7 @@ uint8_t chipID;
  */
 
 
-int BME280_Config (uint8_t osrs_t, uint8_t osrs_p, uint8_t osrs_h, uint8_t mode, uint8_t t_sb, uint8_t filter)
+int BME280_Config (uint8_t osrs_t, uint8_t osrs_p, uint8_t mode, uint8_t t_sb, uint8_t filter)
 {
 	// Read the Trimming parameters
 	if (TrimRead() != 0)
@@ -73,17 +69,17 @@ int BME280_Config (uint8_t osrs_t, uint8_t osrs_p, uint8_t osrs_h, uint8_t mode,
 
 
 	// write the humidity oversampling to 0xF2
-	datatowrite = osrs_h;
-	if (HAL_I2C_Mem_Write(&BME280_I2C, BME280_ADDRESS, CTRL_HUM_REG, 1, &datatowrite, 1, 1000) != HAL_OK)
-	{
-		return 3;  //error NUM for debug
-	}
-	HAL_Delay (100);
-	HAL_I2C_Mem_Read(&BME280_I2C, BME280_ADDRESS, CTRL_HUM_REG, 1, &datacheck, 1, 1000);
-	if (datacheck != datatowrite)
-	{
-		return 4;  //error NUM for debug
-	}
+	// datatowrite = osrs_h;
+	// if (HAL_I2C_Mem_Write(&BME280_I2C, BME280_ADDRESS, CTRL_HUM_REG, 1, &datatowrite, 1, 1000) != HAL_OK)
+	// {
+	// 	return 3;  //error NUM for debug
+	// }
+	// HAL_Delay (100);
+	// HAL_I2C_Mem_Read(&BME280_I2C, BME280_ADDRESS, CTRL_HUM_REG, 1, &datacheck, 1, 1000);
+	// if (datacheck != datatowrite)
+	// {
+	// 	return 4;  //error NUM for debug
+	// }
 
 
 	// write the standby time and IIR filter coeff to 0xF5
@@ -135,10 +131,10 @@ void BME280_WakeUP(void)
 	HAL_Delay (100);
 }
 
-/* measure the temp, pressure and humidity
+/* measure the temp, pressure
  * the values will be stored in the parameters passed to the function
  */
-void BME280_Measure(float *temperature, float *pressure, float *humidity)
+void BME280_Measure(float *temperature, float *pressure)
 {
     if (BMEReadRaw() == 0)
     {
@@ -156,16 +152,16 @@ void BME280_Measure(float *temperature, float *pressure, float *humidity)
 #endif
         }
 
-        if (hRaw == 0x8000) *humidity = 0; // humidity disabled
-        else
-            *humidity = (bme280_compensate_H_int32(hRaw)) / 1024.0f;
+        // if (hRaw == 0x8000) *humidity = 0; // humidity disabled
+        // else
+        //     *humidity = (bme280_compensate_H_int32(hRaw)) / 1024.0f;
     }
     else
     {
         // if the device is detached
         *temperature = 0;
         *pressure    = 0;
-        *humidity    = 0;
+        // *humidity    = 0;
     }
 }
 
@@ -191,15 +187,15 @@ static int TrimRead(void)
     }
 
     // Lecture spécifique à l'Humidité (Seulement si c'est un BME280)
-    if (chipID == 0x60)
-    {
-        // On lit les 7 octets restants (0xE1 à 0xE7)
-        HAL_StatusTypeDef status2 = HAL_I2C_Mem_Read(&BME280_I2C, BME280_ADDRESS, 0xE1, 1, trimdata + 25, 7, 1000);
-        if (status2 != HAL_OK)
-        {
-            return 2;
-        }
-    }
+    // if (chipID == 0x60)
+    // {
+    //     // On lit les 7 octets restants (0xE1 à 0xE7)
+    //     HAL_StatusTypeDef status2 = HAL_I2C_Mem_Read(&BME280_I2C, BME280_ADDRESS, 0xE1, 1, trimdata + 25, 7, 1000);
+    //     if (status2 != HAL_OK)
+    //     {
+    //         return 2;
+    //     }
+    // }
     // Si c'est un BMP280 (0x58), on saute cette étape car c'est les registres de pression (n'existent pas)
 
     // --- Décodage des paramètres ---
@@ -221,27 +217,27 @@ static int TrimRead(void)
     dig_P9 = (int16_t)(trimdata[23] << 8 | trimdata[22]);
 
     // Humidity coefficients (On ne décode que si c'est un BME280)
-    if (chipID == 0x60)
-    {
-        dig_H1 = trimdata[24];
-        dig_H2 = (int16_t)(trimdata[26] << 8 | trimdata[25]);
-        dig_H3 = trimdata[27];
-        dig_H4 = (int16_t)((trimdata[28] << 4) | (trimdata[29] & 0x0F));
-        dig_H5 = (int16_t)((trimdata[30] << 4) | (trimdata[29] >> 4));
-        dig_H6 = (int8_t)trimdata[31];
-    }
-    else
-    {
-        // Pour un BMP280, on met tout à zéro pour éviter des calculs bizarres
-        dig_H1 = dig_H2 = dig_H3 = dig_H4 = dig_H5 = dig_H6 = 0;
-    }
+    // if (chipID == 0x60)
+    // {
+    //     dig_H1 = trimdata[24];
+    //     dig_H2 = (int16_t)(trimdata[26] << 8 | trimdata[25]);
+    //     dig_H3 = trimdata[27];
+    //     dig_H4 = (int16_t)((trimdata[28] << 4) | (trimdata[29] & 0x0F));
+    //     dig_H5 = (int16_t)((trimdata[30] << 4) | (trimdata[29] >> 4));
+    //     dig_H6 = (int8_t)trimdata[31];
+    // }
+    // else
+    // {
+    //     // Pour un BMP280, on met tout à zéro pour éviter des calculs bizarres
+    //     dig_H1 = dig_H2 = dig_H3 = dig_H4 = dig_H5 = dig_H6 = 0;
+    // }
 
     return 0; // Success !
 }
 
 static int BMEReadRaw(void)
 {
-	uint8_t RawData[8];
+	uint8_t RawData[6];
 
 	// Check the chip ID before reading
 	HAL_I2C_Mem_Read(&BME280_I2C, BME280_ADDRESS, ID_REG, 1, &chipID, 1, 1000);
@@ -249,14 +245,14 @@ static int BMEReadRaw(void)
 	if (chipID == 0x60 || chipID == 0x58)
 	{
 		// Read the Registers 0xF7 to 0xFE
-		HAL_I2C_Mem_Read(&BME280_I2C, BME280_ADDRESS, PRESS_MSB_REG, 1, RawData, 8, HAL_MAX_DELAY);
+		HAL_I2C_Mem_Read(&BME280_I2C, BME280_ADDRESS, PRESS_MSB_REG, 1, RawData, 6, HAL_MAX_DELAY);
 
 		/* Calculate the Raw data for the parameters
 		 * Here the Pressure and Temperature are in 20 bit format and humidity in 16 bit format
 		 */
 		pRaw = (RawData[0]<<12)|(RawData[1]<<4)|(RawData[2]>>4);
 		tRaw = (RawData[3]<<12)|(RawData[4]<<4)|(RawData[5]>>4);
-		hRaw = (RawData[6]<<8)|(RawData[7]);
+		// hRaw = (RawData[6]<<8)|(RawData[7]);
 
 		return 0;
 	}
@@ -340,19 +336,19 @@ static uint32_t BME280_compensate_P_int32(int32_t adc_P)
 /* Returns humidity in %RH as unsigned 32 bit integer in Q22.10 format (22 integer and 10 fractional bits).
    Output value of “47445” represents 47445/1024 = 46.333 %RH
 */
-static uint32_t bme280_compensate_H_int32(int32_t adc_H)
-{
-	int32_t v_x1_u32r;
-	v_x1_u32r = (t_fine - ((int32_t)76800));
-	v_x1_u32r = (((((adc_H << 14) - (((int32_t)dig_H4) << 20) - (((int32_t)dig_H5) *\
-			v_x1_u32r)) + ((int32_t)16384)) >> 15) * (((((((v_x1_u32r *\
-					((int32_t)dig_H6)) >> 10) * (((v_x1_u32r * ((int32_t)dig_H3)) >> 11) +\
-							((int32_t)32768))) >> 10) + ((int32_t)2097152)) * ((int32_t)dig_H2) +\
-					8192) >> 14));
-	v_x1_u32r = (v_x1_u32r - (((((v_x1_u32r >> 15) * (v_x1_u32r >> 15)) >> 7) *\
-			((int32_t)dig_H1)) >> 4));
-	v_x1_u32r = (v_x1_u32r < 0 ? 0 : v_x1_u32r);
-	v_x1_u32r = (v_x1_u32r > 419430400 ? 419430400 : v_x1_u32r);
-	return (uint32_t)(v_x1_u32r>>12);
-}
+// static uint32_t bme280_compensate_H_int32(int32_t adc_H)
+// {
+// 	int32_t v_x1_u32r;
+// 	v_x1_u32r = (t_fine - ((int32_t)76800));
+// 	v_x1_u32r = (((((adc_H << 14) - (((int32_t)dig_H4) << 20) - (((int32_t)dig_H5) *\
+// 			v_x1_u32r)) + ((int32_t)16384)) >> 15) * (((((((v_x1_u32r *\
+// 					((int32_t)dig_H6)) >> 10) * (((v_x1_u32r * ((int32_t)dig_H3)) >> 11) +\
+// 							((int32_t)32768))) >> 10) + ((int32_t)2097152)) * ((int32_t)dig_H2) +\
+// 					8192) >> 14));
+// 	v_x1_u32r = (v_x1_u32r - (((((v_x1_u32r >> 15) * (v_x1_u32r >> 15)) >> 7) *\
+// 			((int32_t)dig_H1)) >> 4));
+// 	v_x1_u32r = (v_x1_u32r < 0 ? 0 : v_x1_u32r);
+// 	v_x1_u32r = (v_x1_u32r > 419430400 ? 419430400 : v_x1_u32r);
+// 	return (uint32_t)(v_x1_u32r>>12);
+// }
 /*********************************************************************************************************/
