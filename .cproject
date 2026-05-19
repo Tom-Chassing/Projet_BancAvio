@@ -192,4 +192,5 @@
 			<resource resourceType="PROJECT" workspacePath="/Projet_BancAvio"/>
 		</configuration>
 	</storageModule>
+	<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 </cproject>
