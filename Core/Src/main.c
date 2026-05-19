@@ -56,7 +56,6 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 #define SPI_CS_GPIO_Port GPIOB
 #define SPI_CS_Pin GPIO_PIN_0
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -71,9 +70,6 @@ void myprintf(const char *fmt, ...);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-FATFS FatFs;
-FIL fil;
-
 void myprintf(const char *fmt, ...) {
   static char buffer[256];
   va_list args;
@@ -117,7 +113,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
- // MX_I2C1_Init();
+  MX_I2C1_Init();
   MX_SPI3_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
@@ -125,7 +121,7 @@ int main(void)
   /*------------------------------------------
   Capteur de temperature et de pression BMP280
   --------------------------------------------*/
- /* int status = BME280_Config (OSRS_2, OSRS_16, MODE_NORMAL, T_SB_0p5, IIR_16);
+ int status = BME280_Config (OSRS_2, OSRS_16, MODE_NORMAL, T_SB_0p5, IIR_16);
   if (status!= 0)
     {
   	  Error_Handler();
@@ -134,70 +130,40 @@ int main(void)
   BME280_WakeUP();
   float temp=0;
   float press=0;
- */
+ 
   /*------------------------------------------
   Carte SD + FatFS demo
   --------------------------------------------*/
   myprintf("TEST SPI EN COURS ...\r\n");
 
-
-
-
-
-
-
-
-
   //Force CS high
-
   HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET);
-
   HAL_Delay(10);
 
-
-
   // Envoie 10 octets 0xFF et affiche ce qu'on reçoit
-
   uint8_t tx = 0xFF, rx = 0x00;
-
   myprintf("Dummy bytes received: ");
-
   for(int i = 0; i < 10; i++) {
-
 	  HAL_SPI_TransmitReceive(&hspi3, &tx, &rx, 1, 100);
-
 	  myprintf("%02X ", rx);
-
   }
-
   myprintf("\r\n");
-
-
 
   // Force CS low et envoie CMD0
 
   HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET);
-
   HAL_Delay(1);
-
   uint8_t cmd0[] = {0x40, 0x00, 0x00, 0x00, 0x00, 0x95};
-
   uint8_t resp[7] = {0};
-
   HAL_SPI_Transmit(&hspi3, cmd0, 6, 100);
 
   // Lire 7 octets de réponse
-
   for(int i = 0; i < 7; i++) {
-
 	  HAL_SPI_TransmitReceive(&hspi3, &tx, &resp[i], 1, 100);
-
 	  myprintf("resp[%d] = %02X\r\n", i, resp[i]);
-
   }
 
   HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET);
-
 
   myprintf("\r\n~ SD card demo by kiwih ~\r\n\r\n");
 
@@ -212,20 +178,17 @@ int main(void)
   fres = f_mount(&FatFs, "", 1); //1=mount now
   if (fres != FR_OK) {
   myprintf("f_mount error (%i)\r\n", fres);
-  //while(1);
+  Error_Handler();
   }
 
-  
   //Let's get some statistics from the SD card
   DWORD free_clusters, free_sectors, total_sectors;
 
   FATFS* getFreeFs;
-
-
   fres = f_getfree("", &free_clusters, &getFreeFs);
   if (fres != FR_OK) {
   myprintf("f_getfree error (%i)\r\n", fres);
-  //while(1);
+  Error_Handler();
   }
 
   //Formula comes from ChaN's documentation
@@ -238,7 +201,7 @@ int main(void)
   fres = f_open(&fil, "TEST.TXT", FA_READ);
   if (fres != FR_OK) {
   myprintf("f_open error (%i)\r\n", fres);
-  //while(1);
+  Error_Handler();
   }
   else {
   myprintf("I was able to open 'test.txt' for reading!\r\n");
@@ -295,7 +258,7 @@ int main(void)
   /*------------------------------------------
   Partie capteur de temperature et de pression BMP280
   --------------------------------------------*/
-  /*BME280_Measure(&temp,&press);
+  BME280_Measure(&temp,&press);
 
   char mess[100];
   sprintf(mess, "T: %.2f C, P: %.2f hPa \r\n", temp, press);
@@ -317,7 +280,7 @@ int main(void)
   ssd1306_UpdateScreen();
 
   HAL_Delay(2000);
-  */
+  
   }
   /* USER CODE END 3 */
 }
