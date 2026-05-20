@@ -331,6 +331,21 @@ int main(void)
   float pitch = 0;
   float roll = 0;
   float yaw = 0;
+  //Variables de corrections pour l'OFFSET du magnétomètre et l'inclinaison du capteur
+  float pitch_rad = 0;
+  float roll_rad = 0;
+  float mx = 0;
+  float my = 0;
+  float mz = 0;
+  float mag_x_comp = 0;
+  float mag_y_comp = 0;
+
+
+  /*------------------------------------------
+  Variable de fréquence d'acquisition
+  --------------------------------------------*/
+  uint32_t last_tick = HAL_GetTick();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -340,91 +355,99 @@ int main(void)
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
+  if (HAL_GetTick() - last_tick >= 200) 
+  { //Acquisition toutes les 200ms
+    last_tick = HAL_GetTick(); //Reset du timer pour la prochaine acquisition
 
-  /*------------------------------------------
-  Partie gyroscope ICM20948
-  --------------------------------------------*/
-  //Le capteur de temperature et de pression BMP208
-  BME280_Measure(&temp,&press);
-  
-  //Le capteur de mouvement ICM20948 (gyroscope, accéléromètre et magnétomètre)
-  icm20948_gyro_read(& gyrodata);
-  icm20948_accel_read(& acceldata);
-  ak09916_mag_read(& magdata); 
-  magdata.x -= MAG_OFFSET_X;
-  magdata.y -= MAG_OFFSET_Y;
-  magdata.z -= MAG_OFFSET_Z;
-  // Calcul des angles
-  pitch = atan2(-acceldata.x, sqrt(acceldata.y * acceldata.y + acceldata.z * acceldata.z)) * 180.0 / M_PI;
-  roll = atan2(acceldata.y, acceldata.z) * 180.0 / M_PI;
-  yaw = atan2(magdata.y, magdata.x) * 180.0 / M_PI;
+    /*------------------------------------------
+    Partie gyroscope ICM20948
+    --------------------------------------------*/
+    //Le capteur de temperature et de pression BMP208
+    BME280_Measure(&temp,&press);
+    
+    //Le capteur de mouvement ICM20948 (gyroscope, accéléromètre et magnétomètre)
+    icm20948_gyro_read(& gyrodata);
+    icm20948_accel_read(& acceldata);
+    ak09916_mag_read(& magdata); 
+    mx = magdata.x - MAG_OFFSET_X;
+    my = magdata.y - MAG_OFFSET_Y;
+    mz = magdata.z - MAG_OFFSET_Z;
+    // Calcul des angles
+    pitch_rad = atan2(-acceldata.x, sqrt(acceldata.y * acceldata.y + acceldata.z * acceldata.z));
+    roll_rad = atan2(acceldata.y, acceldata.z);
+    pitch = pitch_rad * 180.0 / M_PI;
+    roll = roll_rad * 180.0 / M_PI;
 
-  /*------------------------------------------
-  Partie affichage Terminal Serie
-  --------------------------------------------*/
-  myprintf("Serial Terminal | T: %.2f °C, P: %.2f hPa \r\n", temp, press);
+    mag_x_comp = mx * cos(pitch_rad) + mz * sin(pitch_rad);
+    mag_y_comp = mx * sin(roll_rad) * sin(pitch_rad) + my * cos(roll_rad) - mz * sin(roll_rad) * cos(pitch_rad);
+    yaw = atan2(mag_y_comp, mag_x_comp) * 180.0 / M_PI;
 
-  myprintf("Gyro (dps) | X: %.2f, Y: %.2f, Z: %.2f\r\n", gyrodata.x, gyrodata.y, gyrodata.z);
-  myprintf("Accel (g) | X: %.2f, Y: %.2f, Z: %.2f\r\n", acceldata.x, acceldata.y, acceldata.z);
-  myprintf("Mag (uT) | X: %.2f, Y: %.2f, Z: %.2f\r\n", magdata.x, magdata.y, magdata.z); 
+    /*------------------------------------------
+    Partie affichage Terminal Serie
+    --------------------------------------------*/
+    myprintf("Serial Terminal | T: %.2f C, P: %.2f hPa \r\n", temp, press);
 
-  /*------------------------------------------
-  Partie affichage Écran OLED
-  --------------------------------------------*/
-  ssd1306_Fill(Black);
+    myprintf("Gyro (dps) | X: %.2f, Y: %.2f, Z: %.2f\r\n", gyrodata.x, gyrodata.y, gyrodata.z);
+    myprintf("Accel (g) | X: %.2f, Y: %.2f, Z: %.2f\r\n", acceldata.x, acceldata.y, acceldata.z);
+    myprintf("Mag (uT) | X: %.2f, Y: %.2f, Z: %.2f\r\n", magdata.x, magdata.y, magdata.z); 
 
-  ssd1306_SetCursor(2, 0);
-  char strPress[20];
-  sprintf(strPress, "P: %.2f hPa", press);
-  ssd1306_WriteString(strPress, Font_7x10, White);
-  
-  ssd1306_SetCursor(2, 10);
-  char strTemp[20];
-  sprintf(strTemp, "T: %.2f °C", temp);
-  ssd1306_WriteString(strTemp, Font_7x10, White);
+    /*------------------------------------------
+    Partie affichage Écran OLED
+    --------------------------------------------*/
+    ssd1306_Fill(Black);
 
-  draw_compass(yaw);
-  draw_artificial_horizon(pitch, roll);
+    ssd1306_SetCursor(2, 0);
+    char strPress[20];
+    sprintf(strPress, "P: %.2f hPa", press);
+    ssd1306_WriteString(strPress, Font_7x10, White);
+    
+    ssd1306_SetCursor(2, 10);
+    char strTemp[20];
+    sprintf(strTemp, "T: %.2f C", temp);
+    ssd1306_WriteString(strTemp, Font_7x10, White);
 
-  ssd1306_UpdateScreen();
+    draw_compass(yaw);
+    draw_artificial_horizon(pitch, roll);
 
-  /*------------------------------------------
-  Partie écriture sur carte SD
-  --------------------------------------------*/
+    ssd1306_UpdateScreen();
 
-  //Now let's try and write a file "write.txt"
-  fres = f_open(&fil, nom_fichier, FA_WRITE | FA_OPEN_ALWAYS | FA_OPEN_APPEND);
-  if(fres == FR_OK) {
-  myprintf("SD | Ouverture de %s pour écriture\r\n", nom_fichier);
-  } else {
-  myprintf("SD | Erreur f_open (%i)\r\n", fres);
+    /*------------------------------------------
+    Partie écriture sur carte SD
+    --------------------------------------------*/
+
+    //Now let's try and write a file "write.txt"
+    fres = f_open(&fil, nom_fichier, FA_WRITE | FA_OPEN_ALWAYS | FA_OPEN_APPEND);
+    if(fres == FR_OK) {
+    myprintf("SD | Ouverture de %s pour écriture\r\n", nom_fichier);
+    } else {
+    myprintf("SD | Erreur f_open (%i)\r\n", fres);
+    }
+
+    char line[250];
+    //Copy in a string
+    //Format CSV : "temp;press;etc" car Excel sépare grace au "";"
+    snprintf(line, sizeof(line), "%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f\r\n", temp, press, gyrodata.x, gyrodata.y, gyrodata.z, acceldata.x, acceldata.y, acceldata.z, magdata.x, magdata.y, magdata.z);
+    UINT bytesWrote;
+    fres = f_write(&fil, line, strlen(line), &bytesWrote);
+    if(fres == FR_OK) {
+    myprintf("SD | Wrote %i bytes to %s!\r\n", bytesWrote, nom_fichier);
+    } else {
+    myprintf("SD | f_write error (%i)\r\n", fres);
+    }
+
+    //Be a tidy kiwi - don't forget to close your file!
+    f_close(&fil);
+
+    /*------------------------------------------
+    Partie de contrôle d'arrêt d'urgence et de limitation du nombre de mesures
+    --------------------------------------------*/
+
+    CTOP++;
+    if (CTOP > 100 || stop_logging == 1) { //On s'arrête après 100 mesures pour éviter de remplir la carte SD
+      myprintf("SD | BP presse ou limite (100) atteinte, arrêt de la journalisation.\r\n");
+      break;  
+    }
   }
-
-  char line[250];
-  //Copy in a string
-  //Format CSV : "temp;press;etc" car Excel sépare grace au "";"
-  snprintf(line, sizeof(line), "%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f\r\n", temp, press, gyrodata.x, gyrodata.y, gyrodata.z, acceldata.x, acceldata.y, acceldata.z, magdata.x, magdata.y, magdata.z);
-  UINT bytesWrote;
-  fres = f_write(&fil, line, strlen(line), &bytesWrote);
-  if(fres == FR_OK) {
-  myprintf("SD | Wrote %i bytes to %s!\r\n", bytesWrote, nom_fichier);
-  } else {
-  myprintf("SD | f_write error (%i)\r\n", fres);
-  }
-
-  //Be a tidy kiwi - don't forget to close your file!
-  f_close(&fil);
-
-  /*------------------------------------------
-  Partie de contrôle d'arrêt d'urgence et de limitation du nombre de mesures
-  --------------------------------------------*/
-
-  CTOP++;
-  if (CTOP > 60 || stop_logging == 1) { //On s'arrête après 60 mesures pour éviter de remplir la carte SD
-    myprintf("SD | BP presse ou limite (60) atteinte, arrêt de la journalisation.\r\n");
-    break;  
-  }
-  HAL_Delay(500);
   
   }
   //demontage de la carte SD pour éviter les corruptions de données
