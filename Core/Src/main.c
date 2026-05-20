@@ -63,6 +63,9 @@ UART_HandleTypeDef huart2;
 FATFS FatFs; 	//Fatfs handle
 FIL fil; 		//File handle
 FRESULT fres; //Result after operations
+
+volatile uint8_t stop_logging = 0; // pour le BP d'arrêt d'urgence
+volatile uint32_t CTOP = 0; //Compteur de mesures pour limiter le nombre de fichiers créés sur la carte SD
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -232,9 +235,6 @@ int main(void)
   f_close(&fil); */
   /*---------------------------------*/
 
-  //Variable temporaire en attendant le BP
-  int CTOP = 0;
-
   /*Créer un nom de fichier unique, à partir du numéro de session précédente */
   int i = 0;
   char nom_fichier[30];
@@ -295,9 +295,9 @@ int main(void)
   //Now let's try and write a file "write.txt"
   fres = f_open(&fil, nom_fichier, FA_WRITE | FA_OPEN_ALWAYS | FA_OPEN_APPEND);
   if(fres == FR_OK) {
-  myprintf("SD | Opening %s for writing\r\n", nom_fichier);
+  myprintf("SD | Ouverture de %s pour écriture\r\n", nom_fichier);
   } else {
-  myprintf("SD | f_open error (%i)\r\n", fres);
+  myprintf("SD | Erreur f_open (%i)\r\n", fres);
   }
 
   char line[100];
@@ -315,14 +315,14 @@ int main(void)
   f_close(&fil);
 
   CTOP++;
-  if (CTOP > 5) { //On s'arrête après 5 mesures pour éviter de remplir la carte SD
-    myprintf("SD | CTOP limit reached, stopping measurements.\r\n");
+  if (CTOP > 30 || stop_logging == 1) { //On s'arrête après 30 mesures pour éviter de remplir la carte SD
+    myprintf("SD | BP presse ou limite (30) atteinte, arrêt de la journalisation.\r\n");
     break;  
   }
   HAL_Delay(2000);
   
   }
-  //We're done, so de-mount the drive
+  //demontage de la carte SD pour éviter les corruptions de données
   f_mount(NULL, "", 0);
   myprintf("SD | Carte SD demontee en toute securite.\r\n");
 
@@ -532,13 +532,28 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(SPI3_CS_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : BP_GPIO_EXTI8_Pin */
+  GPIO_InitStruct.Pin = BP_GPIO_EXTI8_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(BP_GPIO_EXTI8_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if(GPIO_Pin == BP_GPIO_EXTI8_Pin) {
+    stop_logging = 1; // On lève le drapeau
+  }
+}
 /* USER CODE END 4 */
 
 /**
