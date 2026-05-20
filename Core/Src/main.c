@@ -53,6 +53,8 @@ I2C_HandleTypeDef hi2c1;
 
 SPI_HandleTypeDef hspi3;
 
+TIM_HandleTypeDef htim16;
+
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
@@ -93,10 +95,12 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SPI3_Init(void);
+static void MX_TIM16_Init(void);
 /* USER CODE BEGIN PFP */
 void myprintf(const char *fmt, ...);
 void draw_compass(float angle_degrees);
 void draw_artificial_horizon(float pitch, float roll);
+uint32_t calcul_rapport_cyclique(float yaw);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -157,6 +161,17 @@ void draw_artificial_horizon(float pitch, float roll) {
     // 6. Dessiner la ligne d'horizon (qui pivote et monte/descend)
     ssd1306_Line(HORIZON_CENTER_X - dx, center_y_line - dy, HORIZON_CENTER_X + dx, center_y_line + dy, White);
 }
+
+uint32_t calcul_rapport_cyclique(float yaw){
+    // On sait que le yaw varie entre -180° et +180°
+    // On veut un rapport cyclique entre 5% de 20 ms = 1 ms (pour -180°) -> seroM à -90°
+    // et 10% de 20 ms = 2 ms (pour +180°) -> servoM à +90°
+    float nb_ticks = 1500 + (yaw / 360) * 1000;
+    if (nb_ticks < 1000) nb_ticks = 1000;   // Limite inférieure
+    if (nb_ticks > 2000) nb_ticks = 2000; // Limite supérieure
+
+    return (uint32_t)nb_ticks;
+}
 /* USER CODE END 0 */
 
 /**
@@ -192,7 +207,7 @@ int main(void)
   MX_I2C1_Init();
   MX_SPI3_Init();
   MX_FATFS_Init();
-
+  MX_TIM16_Init();
   /* USER CODE BEGIN 2 */
 
   //Initialisation de l'écran OLED
@@ -346,15 +361,22 @@ int main(void)
   --------------------------------------------*/
   uint32_t last_tick = HAL_GetTick();
 
+  /*------------------------------------------
+  Pilotage PWM du servomoteur 
+  -------------------------------------------*/
+  float rapport_cyclique = 75;
+  HAL_TIM_PWM_Start(&htim16, TIM_CHANNEL_1);  // Start PWM on TIM1_CH1
+  __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, rapport_cyclique); // 7,5% duty cycle (1,5 ms / 20 ms) pour position = 0°
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-  /* USER CODE END WHILE */
+    /* USER CODE END WHILE */
 
-  /* USER CODE BEGIN 3 */
+    /* USER CODE BEGIN 3 */
   if (HAL_GetTick() - last_tick >= 200) 
   { //Acquisition toutes les 200ms
     last_tick = HAL_GetTick(); //Reset du timer pour la prochaine acquisition
@@ -439,12 +461,18 @@ int main(void)
     f_close(&fil);
 
     /*------------------------------------------
+    Pilotage servomoteur
+    --------------------------------------------*/
+    rapport_cyclique = calcul_rapport_cyclique(yaw);
+    __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, rapport_cyclique); 
+
+    /*------------------------------------------
     Partie de contrôle d'arrêt d'urgence et de limitation du nombre de mesures
     --------------------------------------------*/
 
     CTOP++;
-    if (CTOP > 100 || stop_logging == 1) { //On s'arrête après 100 mesures pour éviter de remplir la carte SD
-      myprintf("SD | BP presse ou limite (100) atteinte, arrêt de la journalisation.\r\n");
+    if (CTOP > 300 || stop_logging == 1) { //On s'arrête après 300 mesures = 1 min pour éviter de remplir la carte SD
+      myprintf("SD | BP presse ou limite (300) atteinte, arrêt de la journalisation.\r\n");
       break;  
     }
   }
@@ -595,6 +623,68 @@ static void MX_SPI3_Init(void)
   /* USER CODE BEGIN SPI3_Init 2 */
 
   /* USER CODE END SPI3_Init 2 */
+
+}
+
+/**
+  * @brief TIM16 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM16_Init(void)
+{
+
+  /* USER CODE BEGIN TIM16_Init 0 */
+
+  /* USER CODE END TIM16_Init 0 */
+
+  TIM_OC_InitTypeDef sConfigOC = {0};
+  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
+
+  /* USER CODE BEGIN TIM16_Init 1 */
+
+  /* USER CODE END TIM16_Init 1 */
+  htim16.Instance = TIM16;
+  htim16.Init.Prescaler = 79;
+  htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim16.Init.Period = 19999;
+  htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim16.Init.RepetitionCounter = 0;
+  htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim16) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim16) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim16, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+  sBreakDeadTimeConfig.DeadTime = 0;
+  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+  if (HAL_TIMEx_ConfigBreakDeadTime(&htim16, &sBreakDeadTimeConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM16_Init 2 */
+
+  /* USER CODE END TIM16_Init 2 */
+  HAL_TIM_MspPostInit(&htim16);
 
 }
 
