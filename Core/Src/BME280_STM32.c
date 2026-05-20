@@ -13,7 +13,7 @@ static int TrimRead(void);
 static int BMEReadRaw(void);
 static int32_t BME280_compensate_T_int32(int32_t adc_T);
 static uint32_t BME280_compensate_P_int64(int32_t adc_P);
-static uint32_t BME280_compensate_P_int32(int32_t adc_P);
+//static uint32_t BME280_compensate_P_int32(int32_t adc_P);
 // Humidity compensation function intentionally omitted: not supported on BMP280
 
 uint8_t TrimParam[36];
@@ -338,17 +338,5 @@ static uint32_t BME280_compensate_P_int32(int32_t adc_P)
 */
 // static uint32_t bme280_compensate_H_int32(int32_t adc_H)
 // {
-// 	int32_t v_x1_u32r;
-// 	v_x1_u32r = (t_fine - ((int32_t)76800));
-// 	v_x1_u32r = (((((adc_H << 14) - (((int32_t)dig_H4) << 20) - (((int32_t)dig_H5) *\
-// 			v_x1_u32r)) + ((int32_t)16384)) >> 15) * (((((((v_x1_u32r *\
-// 					((int32_t)dig_H6)) >> 10) * (((v_x1_u32r * ((int32_t)dig_H3)) >> 11) +\
-// 							((int32_t)32768))) >> 10) + ((int32_t)2097152)) * ((int32_t)dig_H2) +\
-// 					8192) >> 14));
-// 	v_x1_u32r = (v_x1_u32r - (((((v_x1_u32r >> 15) * (v_x1_u32r >> 15)) >> 7) *\
-// 			((int32_t)dig_H1)) >> 4));
-// 	v_x1_u32r = (v_x1_u32r < 0 ? 0 : v_x1_u32r);
-// 	v_x1_u32r = (v_x1_u32r > 419430400 ? 419430400 : v_x1_u32r);
-// 	return (uint32_t)(v_x1_u32r>>12);
-// }
-/*********************************************************************************************************/
+// DELETED FOR BMP280, not supported. And the \ were triggering the warnings.
+//	}

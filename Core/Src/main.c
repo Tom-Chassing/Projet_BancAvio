@@ -18,11 +18,14 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "fatfs.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h> //for va_list var arg functions
+
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
 #include "BME280_STM32.h"
@@ -46,10 +49,23 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
+SPI_HandleTypeDef hspi3;
+
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+#define SPI_CS_GPIO_Port GPIOB
+#define SPI_CS_Pin GPIO_PIN_0
 
+//Variables for FatFs deplaced here to be global and accessible in the whole file, 
+//including in the main loop for file operations
+//Evite aussi le Stack overflow qui peut arriver si on déclare ces grosses structures dans la fonction main
+FATFS FatFs; 	//Fatfs handle
+FIL fil; 		//File handle
+FRESULT fres; //Result after operations
+
+volatile uint8_t stop_logging = 0; // pour le BP d'arrêt d'urgence
+volatile uint32_t CTOP = 0; //Compteur de mesures pour limiter le nombre de fichiers créés sur la carte SD
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -57,13 +73,24 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_SPI3_Init(void);
 /* USER CODE BEGIN PFP */
-
+void myprintf(const char *fmt, ...);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void myprintf(const char *fmt, ...) {
+  static char buffer[256];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
 
+  int len = strlen(buffer);
+  HAL_UART_Transmit(&huart2, (uint8_t*)buffer, len, -1);
+
+}
 /* USER CODE END 0 */
 
 /**
@@ -97,8 +124,14 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_I2C1_Init();
+  MX_SPI3_Init();
+  MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-  int status = BME280_Config (OSRS_2, OSRS_16, MODE_NORMAL, T_SB_0p5, IIR_16);
+  
+  /*------------------------------------------
+  Capteur de temperature et de pression BMP280
+  --------------------------------------------*/
+ int status = BME280_Config (OSRS_2, OSRS_16, MODE_NORMAL, T_SB_0p5, IIR_16);
   if (status!= 0)
     {
   	  Error_Handler();
@@ -107,7 +140,117 @@ int main(void)
   BME280_WakeUP();
   float temp=0;
   float press=0;
+ 
+  /*------------------------------------------
+  Carte SD + FatFS demo
+  --------------------------------------------*/
+  myprintf("TEST SPI EN COURS ...\r\n");
 
+  //Force CS high
+  //SD cards require CS to be high when power is applied
+  HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET);
+  HAL_Delay(10);
+
+  // Envoie 10 octets 0xFF et affiche ce qu'on reçoit
+  /*La norme exige de fournir un minimum de 74 impulsions d'horloge 
+  avec la ligne de transmission (MOSI) maintenue à l'état haut (1) 
+  avant de pouvoir envoyer la toute première commande.*/
+  uint8_t tx = 0xFF, rx = 0x00;
+  myprintf("Dummy bytes received: ");
+  for(int i = 0; i < 10; i++) {
+	  HAL_SPI_TransmitReceive(&hspi3, &tx, &rx, 1, 100);
+	  myprintf("%02X ", rx);
+  }
+  myprintf("\r\n");
+
+  // Force CS low et envoie CMD0 pour réveiller la carte SD
+  HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET);
+  HAL_Delay(1);
+  uint8_t cmd0[] = {0x40, 0x00, 0x00, 0x00, 0x00, 0x95}; //Norme de réveil pour les SD, 0x95 est le CRC correct pour CMD0
+  uint8_t resp[7] = {0};
+  HAL_SPI_Transmit(&hspi3, cmd0, 6, 100);
+
+  // Lire 7 octets de réponse
+  for(int i = 0; i < 7; i++) {
+	  HAL_SPI_TransmitReceive(&hspi3, &tx, &resp[i], 1, 100);
+	  myprintf("resp[%d] = %02X\r\n", i, resp[i]);
+  }
+  //Doit renvoyer "01" pour indiquer que le SD est en mode idle, prêt à recevoir des commandes
+
+  HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET);
+
+  myprintf("\r\n~ Fin de l'initialisation ~\r\n\r\n");
+
+  HAL_Delay(1000); //a short delay is important to let the SD card settle
+
+  //declaration of variables for FatFs deplaced to PV section
+  
+  //Open the file system
+  fres = f_mount(&FatFs, "", 1); //1=mount now
+  if (fres != FR_OK) {
+  myprintf("f_mount error (%i)\r\n", fres);
+  Error_Handler();
+  }
+
+  //Let's get some statistics from the SD card
+  DWORD free_clusters, free_sectors, total_sectors;
+
+  FATFS* getFreeFs;
+  fres = f_getfree("", &free_clusters, &getFreeFs);
+  if (fres != FR_OK) {
+  myprintf("f_getfree error (%i)\r\n", fres);
+  Error_Handler();
+  }
+
+  //Formula comes from ChaN's documentation
+  total_sectors = (getFreeFs->n_fatent - 2) * getFreeFs->csize;
+  free_sectors = free_clusters * getFreeFs->csize;
+
+  myprintf("SD card stats:\r\n%10lu KiB total drive space.\r\n%10lu KiB available.\r\n", total_sectors / 2, free_sectors / 2);
+
+  /* Example on how to open a file and read it :
+  //Now let's try to open file "test.txt"
+  fres = f_open(&fil, "TEST.TXT", FA_READ);
+  if (fres != FR_OK) {
+  myprintf("f_open error (%i)\r\n", fres);
+  Error_Handler();
+  }
+  else {
+  myprintf("I was able to open 'test.txt' for reading!\r\n");
+  }
+
+  //Read 30 bytes from a file on the SD card
+  BYTE readBuf[30];
+  
+  //We can either use f_read OR f_gets to get data out of files
+  //f_gets is a wrapper on f_read that does some string formatting for us
+  TCHAR* rres = f_gets((TCHAR*)readBuf, 30, &fil);
+  if(rres != 0) {
+  myprintf("Read string from 'test.txt' contents: %s\r\n", readBuf);
+  } else {
+  myprintf("f_gets error (%i)\r\n", fres);
+  }
+
+  //Be a tidy kiwi - don't forget to close your file!
+  f_close(&fil); */
+  /*---------------------------------*/
+
+  /*Créer un nom de fichier unique, à partir du numéro de session précédente */
+  int i = 0;
+  char nom_fichier[30];
+  FILINFO fno;
+
+  // Boucle pour trouver le premier numéro disponible
+  do {
+      snprintf(nom_fichier, sizeof(nom_fichier), "0:/VOL_%d.CSV", i); //info*
+      i++;
+  } while (f_stat(nom_fichier, &fno) == FR_OK); // FR_OK = le fichier existe, on continue
+  //info* : snprintf(nom_fichier, sizeof(nom_fichier), équivalent de sprintf mais avec une sécurité de la taille du buffer pour éviter les débordements de mémoire
+  
+  i--; // On a trouvé un nom libre
+  // Donc nom de fichier unique pour cette session qui est prêt à être utilisé pour l'écriture
+  myprintf("Nom de fichier unique genere : %s\r\n", nom_fichier);
+  
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -117,18 +260,25 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+  /*------------------------------------------
+  Partie affichage Terminal Serie
+  --------------------------------------------*/
   BME280_Measure(&temp,&press);
 
   char mess[100];
-  sprintf(mess, "T: %.2f C, P: %.2f hPa \r\n", temp, press);
+  sprintf(mess, "Serial Terminal | T: %.2f °C, P: %.2f hPa \r\n", temp, press);
   HAL_UART_Transmit(&huart2, (uint8_t*)mess, strlen(mess), HAL_MAX_DELAY);
 
+  /*------------------------------------------
+  Partie affichage Écran OLED
+  --------------------------------------------*/
   ssd1306_Init();
   ssd1306_Fill(Black);
 
   ssd1306_SetCursor(2, 0);
   char strTemp[20];
-  sprintf(strTemp, "T: %.2f C", temp);
+  sprintf(strTemp, "T: %.2f °C", temp);
   ssd1306_WriteString(strTemp, Font_7x10, White);
 
   ssd1306_SetCursor(2, 10);
@@ -137,7 +287,48 @@ int main(void)
   ssd1306_WriteString(strPress, Font_7x10, White);
 
   ssd1306_UpdateScreen();
+
+  /*------------------------------------------
+  Partie écriture sur carte SD
+  --------------------------------------------*/
+
+  //Now let's try and write a file "write.txt"
+  fres = f_open(&fil, nom_fichier, FA_WRITE | FA_OPEN_ALWAYS | FA_OPEN_APPEND);
+  if(fres == FR_OK) {
+  myprintf("SD | Ouverture de %s pour écriture\r\n", nom_fichier);
+  } else {
+  myprintf("SD | Erreur f_open (%i)\r\n", fres);
+  }
+
+  char line[100];
+  //Copy in a string
+  snprintf(line, sizeof(line), "%.2f;%.2f\r\n", temp, press); //Format CSV : "temp;press" car Excel sépare grace au "";"
+  UINT bytesWrote;
+  fres = f_write(&fil, line, strlen(line), &bytesWrote);
+  if(fres == FR_OK) {
+  myprintf("SD | Wrote %i bytes to %s!\r\n", bytesWrote, nom_fichier);
+  } else {
+  myprintf("SD | f_write error (%i)\r\n", fres);
+  }
+
+  //Be a tidy kiwi - don't forget to close your file!
+  f_close(&fil);
+
+  CTOP++;
+  if (CTOP > 30 || stop_logging == 1) { //On s'arrête après 30 mesures pour éviter de remplir la carte SD
+    myprintf("SD | BP presse ou limite (30) atteinte, arrêt de la journalisation.\r\n");
+    break;  
+  }
   HAL_Delay(2000);
+  
+  }
+  //demontage de la carte SD pour éviter les corruptions de données
+  f_mount(NULL, "", 0);
+  myprintf("SD | Carte SD demontee en toute securite.\r\n");
+
+  // Bloque le processeur ici indefiniment
+  while(1) {
+    HAL_Delay(1000);
   }
   /* USER CODE END 3 */
 }
@@ -240,6 +431,46 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief SPI3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI3_Init(void)
+{
+
+  /* USER CODE BEGIN SPI3_Init 0 */
+
+  /* USER CODE END SPI3_Init 0 */
+
+  /* USER CODE BEGIN SPI3_Init 1 */
+
+  /* USER CODE END SPI3_Init 1 */
+  /* SPI3 parameter configuration*/
+  hspi3.Instance = SPI3;
+  hspi3.Init.Mode = SPI_MODE_MASTER;
+  hspi3.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi3.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi3.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi3.Init.NSS = SPI_NSS_SOFT;
+  hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;
+  hspi3.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi3.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi3.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi3.Init.CRCPolynomial = 7;
+  hspi3.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi3.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  if (HAL_SPI_Init(&hspi3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI3_Init 2 */
+
+  /* USER CODE END SPI3_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -292,14 +523,24 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SPI3_CS_GPIO_Port, SPI3_CS_Pin, GPIO_PIN_SET);
 
-  /*Configure GPIO pin : LD3_Pin */
-  GPIO_InitStruct.Pin = LD3_Pin;
+  /*Configure GPIO pin : SPI3_CS_Pin */
+  GPIO_InitStruct.Pin = SPI3_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD3_GPIO_Port, &GPIO_InitStruct);
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(SPI3_CS_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : BP_GPIO_EXTI8_Pin */
+  GPIO_InitStruct.Pin = BP_GPIO_EXTI8_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(BP_GPIO_EXTI8_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -307,7 +548,12 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if(GPIO_Pin == BP_GPIO_EXTI8_Pin) {
+    stop_logging = 1; // On lève le drapeau
+  }
+}
 /* USER CODE END 4 */
 
 /**
