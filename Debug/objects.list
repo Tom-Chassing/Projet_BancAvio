@@ -1,4 +1,5 @@
 "./Core/Src/BME280_STM32.o"
+"./Core/Src/icm20948.o"
 "./Core/Src/main.o"
 "./Core/Src/ssd1306.o"
 "./Core/Src/ssd1306_fonts.o"

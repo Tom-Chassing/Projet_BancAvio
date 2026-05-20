@@ -29,6 +29,7 @@
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
 #include "BME280_STM32.h"
+#include "icm20948.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
