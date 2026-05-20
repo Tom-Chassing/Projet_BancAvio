@@ -3,6 +3,9 @@
 *
 *  Created on: Dec 26, 2020
 *      Author: mokhwasomssi
+*  Modifie le: 20 avril 2026
+*      Par : TomC
+*      Remplacement des fonctions SPI par des fonctions I2C, car le capteur est en I2C et non en SPI
 */
 
 
