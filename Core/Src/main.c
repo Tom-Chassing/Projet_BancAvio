@@ -30,6 +30,7 @@
 #include "ssd1306_fonts.h"
 #include "BME280_STM32.h"
 #include "icm20948.h"
+#include "math.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -67,6 +68,23 @@ FRESULT fres; //Result after operations
 
 volatile uint8_t stop_logging = 0; // pour le BP d'arrêt d'urgence
 volatile uint32_t CTOP = 0; //Compteur de mesures pour limiter le nombre de fichiers créés sur la carte SD
+
+/*------------Pour le gyroscope ICM20948------------*/
+axises gyrodata;
+axises acceldata;
+axises magdata;
+
+#define CENTER_X 30
+#define CENTER_Y 40
+#define RADIUS   18
+
+#define HORIZON_CENTER_X 100
+#define HORIZON_CENTER_Y 40
+#define HORIZON_RADIUS   18
+
+#define MAG_OFFSET_X 212.50f
+#define MAG_OFFSET_Y 261.00f
+#define MAG_OFFSET_Z 283.50f
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -77,6 +95,8 @@ static void MX_I2C1_Init(void);
 static void MX_SPI3_Init(void);
 /* USER CODE BEGIN PFP */
 void myprintf(const char *fmt, ...);
+void draw_compass(float angle_degrees);
+void draw_artificial_horizon(float pitch, float roll);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -91,6 +111,51 @@ void myprintf(const char *fmt, ...) {
   int len = strlen(buffer);
   HAL_UART_Transmit(&huart2, (uint8_t*)buffer, len, -1);
 
+}
+//Pur travail de l'IA; pour avoir une visualisation de l'orientation du gyroscope ICM20948
+void draw_compass(float angle_degrees) {
+    // 1. Convertir l'angle en radians
+    float angle_rad = angle_degrees * (M_PI / 180.0f);
+
+    // 2. Calculer les coordonnées du bout de l'aiguille
+    int x_target = CENTER_X + (int)(RADIUS * sin(angle_rad));
+    int y_target = CENTER_Y - (int)(RADIUS * cos(angle_rad)); // Moins car le Y de l'écran descend
+
+    // 3. Dessiner le cadran du compas (Cercle extérieur)
+    ssd1306_DrawCircle(CENTER_X, CENTER_Y, RADIUS, White);
+    
+    // 4. Dessiner un petit repère pour le "Nord" (Le haut de l'écran)
+    ssd1306_Line(CENTER_X, CENTER_Y - RADIUS, CENTER_X, CENTER_Y - RADIUS + 5, White);
+
+    // 5. Dessiner l'aiguille (Une simple ligne du centre vers le bord)
+    ssd1306_Line(CENTER_X, CENTER_Y, x_target, y_target, White);
+}
+void draw_artificial_horizon(float pitch, float roll) {
+    // 1. Convertir le roulis en radians
+    float roll_rad = roll * (M_PI / 180.0f);
+
+    // 2. Calculer le décalage vertical dû au tangage
+    // Le facteur 0.5 est ajustable selon la sensibilité visuelle voulue
+    int y_offset = (int)(pitch * 0.5f); 
+    
+    // On limite le décalage pour que la ligne ne sorte pas trop du cercle
+    if (y_offset > HORIZON_RADIUS) y_offset = HORIZON_RADIUS;
+    if (y_offset < -HORIZON_RADIUS) y_offset = -HORIZON_RADIUS;
+
+    int center_y_line = HORIZON_CENTER_Y + y_offset;
+
+    // 3. Calculer les décalages X et Y pour les extrémités de la ligne
+    int dx = (int)(HORIZON_RADIUS * cos(roll_rad));
+    int dy = (int)(HORIZON_RADIUS * sin(roll_rad));
+
+    // 4. Dessiner le cadran extérieur
+    ssd1306_DrawCircle(HORIZON_CENTER_X, HORIZON_CENTER_Y, HORIZON_RADIUS, White);
+    
+    // 5. Dessiner un point central statique (représente ton système/avion)
+    ssd1306_Line(HORIZON_CENTER_X - 5, HORIZON_CENTER_Y, HORIZON_CENTER_X + 5, HORIZON_CENTER_Y, White);
+
+    // 6. Dessiner la ligne d'horizon (qui pivote et monte/descend)
+    ssd1306_Line(HORIZON_CENTER_X - dx, center_y_line - dy, HORIZON_CENTER_X + dx, center_y_line + dy, White);
 }
 /* USER CODE END 0 */
 
@@ -127,8 +192,12 @@ int main(void)
   MX_I2C1_Init();
   MX_SPI3_Init();
   MX_FATFS_Init();
+
   /* USER CODE BEGIN 2 */
-  
+
+  //Initialisation de l'écran OLED
+  ssd1306_Init();
+
   /*------------------------------------------
   Capteur de temperature et de pression BMP280
   --------------------------------------------*/
@@ -251,41 +320,71 @@ int main(void)
   i--; // On a trouvé un nom libre
   // Donc nom de fichier unique pour cette session qui est prêt à être utilisé pour l'écriture
   myprintf("Nom de fichier unique genere : %s\r\n", nom_fichier);
-  
+
+  /* ----------------------------------
+  Gyroscope ICM20948
+  --------------------------------- */
+  //Initialisation des capteurs de mouvement
+  icm20948_init();
+  ak09916_init();
+  // Angles
+  float pitch = 0;
+  float roll = 0;
+  float yaw = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* USER CODE END WHILE */
+  /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
+  /* USER CODE BEGIN 3 */
+
+  /*------------------------------------------
+  Partie gyroscope ICM20948
+  --------------------------------------------*/
+  //Le capteur de temperature et de pression BMP208
+  BME280_Measure(&temp,&press);
+  
+  //Le capteur de mouvement ICM20948 (gyroscope, accéléromètre et magnétomètre)
+  icm20948_gyro_read(& gyrodata);
+  icm20948_accel_read(& acceldata);
+  ak09916_mag_read(& magdata); 
+  magdata.x -= MAG_OFFSET_X;
+  magdata.y -= MAG_OFFSET_Y;
+  magdata.z -= MAG_OFFSET_Z;
+  // Calcul des angles
+  pitch = atan2(-acceldata.x, sqrt(acceldata.y * acceldata.y + acceldata.z * acceldata.z)) * 180.0 / M_PI;
+  roll = atan2(acceldata.y, acceldata.z) * 180.0 / M_PI;
+  yaw = atan2(magdata.y, magdata.x) * 180.0 / M_PI;
 
   /*------------------------------------------
   Partie affichage Terminal Serie
   --------------------------------------------*/
-  BME280_Measure(&temp,&press);
+  myprintf("Serial Terminal | T: %.2f °C, P: %.2f hPa \r\n", temp, press);
 
-  char mess[100];
-  sprintf(mess, "Serial Terminal | T: %.2f °C, P: %.2f hPa \r\n", temp, press);
-  HAL_UART_Transmit(&huart2, (uint8_t*)mess, strlen(mess), HAL_MAX_DELAY);
+  myprintf("Gyro (dps) | X: %.2f, Y: %.2f, Z: %.2f\r\n", gyrodata.x, gyrodata.y, gyrodata.z);
+  myprintf("Accel (g) | X: %.2f, Y: %.2f, Z: %.2f\r\n", acceldata.x, acceldata.y, acceldata.z);
+  myprintf("Mag (uT) | X: %.2f, Y: %.2f, Z: %.2f\r\n", magdata.x, magdata.y, magdata.z); 
 
   /*------------------------------------------
   Partie affichage Écran OLED
   --------------------------------------------*/
-  ssd1306_Init();
   ssd1306_Fill(Black);
 
   ssd1306_SetCursor(2, 0);
+  char strPress[20];
+  sprintf(strPress, "P: %.2f hPa", press);
+  ssd1306_WriteString(strPress, Font_7x10, White);
+  
+  ssd1306_SetCursor(2, 10);
   char strTemp[20];
   sprintf(strTemp, "T: %.2f °C", temp);
   ssd1306_WriteString(strTemp, Font_7x10, White);
 
-  ssd1306_SetCursor(2, 10);
-  char strPress[20];
-  sprintf(strPress, "P: %.2f hPa", press);
-  ssd1306_WriteString(strPress, Font_7x10, White);
+  draw_compass(yaw);
+  draw_artificial_horizon(pitch, roll);
 
   ssd1306_UpdateScreen();
 
@@ -301,9 +400,10 @@ int main(void)
   myprintf("SD | Erreur f_open (%i)\r\n", fres);
   }
 
-  char line[100];
+  char line[250];
   //Copy in a string
-  snprintf(line, sizeof(line), "%.2f;%.2f\r\n", temp, press); //Format CSV : "temp;press" car Excel sépare grace au "";"
+  //Format CSV : "temp;press;etc" car Excel sépare grace au "";"
+  snprintf(line, sizeof(line), "%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f\r\n", temp, press, gyrodata.x, gyrodata.y, gyrodata.z, acceldata.x, acceldata.y, acceldata.z, magdata.x, magdata.y, magdata.z);
   UINT bytesWrote;
   fres = f_write(&fil, line, strlen(line), &bytesWrote);
   if(fres == FR_OK) {
@@ -315,12 +415,16 @@ int main(void)
   //Be a tidy kiwi - don't forget to close your file!
   f_close(&fil);
 
+  /*------------------------------------------
+  Partie de contrôle d'arrêt d'urgence et de limitation du nombre de mesures
+  --------------------------------------------*/
+
   CTOP++;
-  if (CTOP > 30 || stop_logging == 1) { //On s'arrête après 30 mesures pour éviter de remplir la carte SD
-    myprintf("SD | BP presse ou limite (30) atteinte, arrêt de la journalisation.\r\n");
+  if (CTOP > 60 || stop_logging == 1) { //On s'arrête après 60 mesures pour éviter de remplir la carte SD
+    myprintf("SD | BP presse ou limite (60) atteinte, arrêt de la journalisation.\r\n");
     break;  
   }
-  HAL_Delay(2000);
+  HAL_Delay(500);
   
   }
   //demontage de la carte SD pour éviter les corruptions de données
