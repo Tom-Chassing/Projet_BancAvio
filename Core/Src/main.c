@@ -467,6 +467,22 @@ int main(void)
     __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, rapport_cyclique); 
 
     /*------------------------------------------
+    LEDs d'alterte sur dépassement de seuils (40°) pour le tangage et le roulis
+    --------------------------------------------*/
+    // Vérification du Tangage (Pitch)
+    if (fabs(pitch) > 40.0f) {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+    } else {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
+    }
+
+    // Vérification du Roulis (Roll)
+    if (fabs(roll) > 40.0f) {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
+    } else {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
+    }
+    /*------------------------------------------
     Partie de contrôle d'arrêt d'urgence et de limitation du nombre de mesures
     --------------------------------------------*/
 
@@ -660,7 +676,7 @@ static void MX_TIM16_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
+  sConfigOC.Pulse = 1500;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
@@ -741,7 +757,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_pitch_Pin|GPIO_roll_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SPI3_CS_GPIO_Port, SPI3_CS_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pins : GPIO_pitch_Pin GPIO_roll_Pin */
+  GPIO_InitStruct.Pin = GPIO_pitch_Pin|GPIO_roll_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SPI3_CS_Pin */
   GPIO_InitStruct.Pin = SPI3_CS_Pin;

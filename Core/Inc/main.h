@@ -61,8 +61,12 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define MCO_Pin GPIO_PIN_0
 #define MCO_GPIO_Port GPIOA
+#define GPIO_pitch_Pin GPIO_PIN_1
+#define GPIO_pitch_GPIO_Port GPIOA
 #define VCP_TX_Pin GPIO_PIN_2
 #define VCP_TX_GPIO_Port GPIOA
+#define GPIO_roll_Pin GPIO_PIN_3
+#define GPIO_roll_GPIO_Port GPIOA
 #define SPI3_CS_Pin GPIO_PIN_0
 #define SPI3_CS_GPIO_Port GPIOB
 #define BP_GPIO_EXTI8_Pin GPIO_PIN_8
