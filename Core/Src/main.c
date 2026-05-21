@@ -101,6 +101,10 @@ void myprintf(const char *fmt, ...);
 void draw_compass(float angle_degrees);
 void draw_artificial_horizon(float pitch, float roll);
 uint32_t calcul_rapport_cyclique(float yaw);
+//--------------- Fonctions pour l'ARINC 429 ---------------
+uint8_t inversion_byte(uint8_t byte);
+int count_set_bits(uint32_t n);
+uint32_t generate_arinc_word(uint32_t pressure, uint8_t label);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -171,6 +175,64 @@ uint32_t calcul_rapport_cyclique(float yaw){
     if (nb_ticks > 2000) nb_ticks = 2000; // Limite supérieure
 
     return (uint32_t)nb_ticks;
+}
+
+/*-------------------------------
+Fonctions pour l'ARINC 429
+-------------------------------*/
+
+uint8_t inversion_byte(uint8_t byte){
+  //L'ARINC 429 inverse le balel, il donne d'abord le MSB et à la fin le LSB
+  //Si notre label est 429 = 110101101, on doit envoyer 101101011 (0x5B) et pas 110101101 (0x6D)
+  byte = (byte & 0xF0) >> 4 | (byte & 0x0F) << 4;
+  byte = (byte & 0xCC) >> 2 | (byte & 0x33) << 2;
+  byte = (byte & 0xAA) >> 1 | (byte & 0x55) << 1;
+  //Exemple avec : 7654 3210
+  //byte1 : 3210 7654
+  //byte2 : 1032 5476
+  //byte3 : 0123 4567
+  return byte;
+}
+
+// Fonction pour compter le nombre de bits à 1 dans un entier (utile pour le bit de parité)
+int count_set_bits(uint32_t n) {
+    int compte = 0;
+    while (n) {
+        compte += n & 1;
+        n >>= 1;
+    }
+    return compte;
+}
+
+uint32_t generate_arinc_word(uint32_t pressure, uint8_t label) {
+    
+    uint32_t arinc_word = 0; // On part d'un mot vide : 0000 0000 0000 0000 0000 0000 0000 0000
+
+    // Le label (Bits 1 à 8)
+    uint8_t label_reversed = inversion_byte(label);
+    // On implémente ce label dans les 8 premiers bits du mot ARINC  
+    arinc_word = arinc_word | label_reversed; 
+
+    // SDI (Bits 9 et 10)
+    // L'énoncé demande 0, donc on ne fait rien
+
+    // La donnée pure (Bits 11 à 28)
+    uint32_t data_masked = pressure & 0x3FFFF; // Sécurité pour ne garder que 18 bits de données, sans débordement
+    arinc_word = arinc_word | (data_masked << 10);
+
+    // SSM (Bits 30 et 31)
+    // L'énoncé demande 0. On ne fait rienn.
+
+    // Bit de parité (Bit 32)
+    int ones_count = count_set_bits(arinc_word);
+    
+    // Si le nombre de '1' est pair, on doit mettre le 32ème bit à '1' pour que le total devienne impair.
+    if (ones_count % 2 == 0) {
+        arinc_word = arinc_word | ((uint32_t)1 << 31); 
+        //uint32_t sur le '1' nécessaire apparemment pour ne pas avoir un bit signé qui causerait des problèmes lors du décalage
+    }
+
+    return arinc_word;
 }
 /* USER CODE END 0 */
 
@@ -293,32 +355,6 @@ int main(void)
 
   myprintf("SD card stats:\r\n%10lu KiB total drive space.\r\n%10lu KiB available.\r\n", total_sectors / 2, free_sectors / 2);
 
-  /* Example on how to open a file and read it :
-  //Now let's try to open file "test.txt"
-  fres = f_open(&fil, "TEST.TXT", FA_READ);
-  if (fres != FR_OK) {
-  myprintf("f_open error (%i)\r\n", fres);
-  Error_Handler();
-  }
-  else {
-  myprintf("I was able to open 'test.txt' for reading!\r\n");
-  }
-
-  //Read 30 bytes from a file on the SD card
-  BYTE readBuf[30];
-  
-  //We can either use f_read OR f_gets to get data out of files
-  //f_gets is a wrapper on f_read that does some string formatting for us
-  TCHAR* rres = f_gets((TCHAR*)readBuf, 30, &fil);
-  if(rres != 0) {
-  myprintf("Read string from 'test.txt' contents: %s\r\n", readBuf);
-  } else {
-  myprintf("f_gets error (%i)\r\n", fres);
-  }
-
-  //Be a tidy kiwi - don't forget to close your file!
-  f_close(&fil); */
-  /*---------------------------------*/
 
   /*Créer un nom de fichier unique, à partir du numéro de session précédente */
   int i = 0;
@@ -364,9 +400,16 @@ int main(void)
   /*------------------------------------------
   Pilotage PWM du servomoteur 
   -------------------------------------------*/
-  float rapport_cyclique = 75;
+  float rapport_cyclique = 1500;
   HAL_TIM_PWM_Start(&htim16, TIM_CHANNEL_1);  // Start PWM on TIM1_CH1
-  __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, rapport_cyclique); // 7,5% duty cycle (1,5 ms / 20 ms) pour position = 0°
+  __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, rapport_cyclique); //Initialisation à 1.5 ms, position neutre pour le servo
+
+  /*------------------------------------------
+    Message ARINC 429 
+  --------------------------------------------*/
+  //l'ARINC utilise l'octal pour le label ! Source : Wiki
+  uint32_t mesg_arinc = 0 ;
+  uint8_t label_arinc = 0xAE; //256 en octal, 174 en décimal, 0xAE en hexadécimal
 
   /* USER CODE END 2 */
 
@@ -405,10 +448,16 @@ int main(void)
     yaw = atan2(mag_y_comp, mag_x_comp) * 180.0 / M_PI;
 
     /*------------------------------------------
+    Partie message ARINC 429 pour la pression, à envoyer par UART et dans la microSD
+    --------------------------------------------*/
+    uint32_t press_dec = press * 100; //Pression*100 pour avoir les deux décimales
+    mesg_arinc = generate_arinc_word(press_dec, label_arinc); 
+
+    /*------------------------------------------
     Partie affichage Terminal Serie
     --------------------------------------------*/
     myprintf("Serial Terminal | T: %.2f C, P: %.2f hPa \r\n", temp, press);
-
+    myprintf("Message ARINC | 0x%08lX\r\n", mesg_arinc); //%08lX repasse en hexadécimal long pour l'affichage, plus lisible pour un message binaire
     myprintf("Gyro (dps) | X: %.2f, Y: %.2f, Z: %.2f\r\n", gyrodata.x, gyrodata.y, gyrodata.z);
     myprintf("Accel (g) | X: %.2f, Y: %.2f, Z: %.2f\r\n", acceldata.x, acceldata.y, acceldata.z);
     myprintf("Mag (uT) | X: %.2f, Y: %.2f, Z: %.2f\r\n", magdata.x, magdata.y, magdata.z); 
@@ -448,7 +497,7 @@ int main(void)
     char line[250];
     //Copy in a string
     //Format CSV : "temp;press;etc" car Excel sépare grace au "";"
-    snprintf(line, sizeof(line), "%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f\r\n", temp, press, gyrodata.x, gyrodata.y, gyrodata.z, acceldata.x, acceldata.y, acceldata.z, magdata.x, magdata.y, magdata.z);
+    snprintf(line, sizeof(line), "%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;0x%08lX\r\n", temp, press, gyrodata.x, gyrodata.y, gyrodata.z, acceldata.x, acceldata.y, acceldata.z, magdata.x, magdata.y, magdata.z, mesg_arinc);
     UINT bytesWrote;
     fres = f_write(&fil, line, strlen(line), &bytesWrote);
     if(fres == FR_OK) {
@@ -471,24 +520,25 @@ int main(void)
     --------------------------------------------*/
     // Vérification du Tangage (Pitch)
     if (fabs(pitch) > 40.0f) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_pitch_Pin, GPIO_PIN_SET);
     } else {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_pitch_Pin, GPIO_PIN_RESET);
     }
 
     // Vérification du Roulis (Roll)
     if (fabs(roll) > 40.0f) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_roll_Pin, GPIO_PIN_SET);
     } else {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_roll_Pin, GPIO_PIN_RESET);
     }
+
     /*------------------------------------------
     Partie de contrôle d'arrêt d'urgence et de limitation du nombre de mesures
     --------------------------------------------*/
 
     CTOP++;
-    if (CTOP > 300 || stop_logging == 1) { //On s'arrête après 300 mesures = 1 min pour éviter de remplir la carte SD
-      myprintf("SD | BP presse ou limite (300) atteinte, arrêt de la journalisation.\r\n");
+    if (CTOP > 900 || stop_logging == 1) { //On s'arrête après 900 mesures = 3 min pour éviter de remplir la carte SD
+      myprintf("SD | BP presse ou limite (1500) atteinte, arrêt de la journalisation.\r\n");
       break;  
     }
   }
