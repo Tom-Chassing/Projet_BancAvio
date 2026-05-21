@@ -104,7 +104,7 @@ uint32_t calcul_rapport_cyclique(float yaw);
 //--------------- Fonctions pour l'ARINC 429 ---------------
 uint8_t inversion_byte(uint8_t byte);
 int count_set_bits(uint32_t n);
-uint32_t generate_arinc_word(uint32_t pressure, uint32_t label);
+uint32_t generate_arinc_word(uint32_t pressure, uint8_t label);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -204,7 +204,7 @@ int count_set_bits(uint32_t n) {
     return compte;
 }
 
-uint32_t generate_arinc_word(uint32_t pressure, uint32_t label) {
+uint32_t generate_arinc_word(uint32_t pressure, uint8_t label) {
     
     uint32_t arinc_word = 0; // On part d'un mot vide : 0000 0000 0000 0000 0000 0000 0000 0000
 
@@ -355,32 +355,6 @@ int main(void)
 
   myprintf("SD card stats:\r\n%10lu KiB total drive space.\r\n%10lu KiB available.\r\n", total_sectors / 2, free_sectors / 2);
 
-  /* Example on how to open a file and read it :
-  //Now let's try to open file "test.txt"
-  fres = f_open(&fil, "TEST.TXT", FA_READ);
-  if (fres != FR_OK) {
-  myprintf("f_open error (%i)\r\n", fres);
-  Error_Handler();
-  }
-  else {
-  myprintf("I was able to open 'test.txt' for reading!\r\n");
-  }
-
-  //Read 30 bytes from a file on the SD card
-  BYTE readBuf[30];
-  
-  //We can either use f_read OR f_gets to get data out of files
-  //f_gets is a wrapper on f_read that does some string formatting for us
-  TCHAR* rres = f_gets((TCHAR*)readBuf, 30, &fil);
-  if(rres != 0) {
-  myprintf("Read string from 'test.txt' contents: %s\r\n", readBuf);
-  } else {
-  myprintf("f_gets error (%i)\r\n", fres);
-  }
-
-  //Be a tidy kiwi - don't forget to close your file!
-  f_close(&fil); */
-  /*---------------------------------*/
 
   /*Créer un nom de fichier unique, à partir du numéro de session précédente */
   int i = 0;
@@ -426,15 +400,16 @@ int main(void)
   /*------------------------------------------
   Pilotage PWM du servomoteur 
   -------------------------------------------*/
-  float rapport_cyclique = 75;
+  float rapport_cyclique = 1500;
   HAL_TIM_PWM_Start(&htim16, TIM_CHANNEL_1);  // Start PWM on TIM1_CH1
-  __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, rapport_cyclique); // 7,5% duty cycle (1,5 ms / 20 ms) pour position = 0°
+  __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, rapport_cyclique); //Initialisation à 1.5 ms, position neutre pour le servo
 
   /*------------------------------------------
     Message ARINC 429 
   --------------------------------------------*/
+  //l'ARINC utilise l'octal pour le label ! Source : Wiki
   uint32_t mesg_arinc = 0 ;
-  uint32_t label_arinc = 0x100; //256 en héxadécimal
+  uint8_t label_arinc = 0xAE; //256 en octal, 174 en décimal, 0xAE en hexadécimal
 
   /* USER CODE END 2 */
 
@@ -545,16 +520,16 @@ int main(void)
     --------------------------------------------*/
     // Vérification du Tangage (Pitch)
     if (fabs(pitch) > 40.0f) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_pitch_Pin, GPIO_PIN_SET);
     } else {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_pitch_Pin, GPIO_PIN_RESET);
     }
 
     // Vérification du Roulis (Roll)
     if (fabs(roll) > 40.0f) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_roll_Pin, GPIO_PIN_SET);
     } else {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOA, GPIO_roll_Pin, GPIO_PIN_RESET);
     }
 
     /*------------------------------------------
@@ -562,8 +537,8 @@ int main(void)
     --------------------------------------------*/
 
     CTOP++;
-    if (CTOP > 300 || stop_logging == 1) { //On s'arrête après 300 mesures = 1 min pour éviter de remplir la carte SD
-      myprintf("SD | BP presse ou limite (300) atteinte, arrêt de la journalisation.\r\n");
+    if (CTOP > 900 || stop_logging == 1) { //On s'arrête après 900 mesures = 3 min pour éviter de remplir la carte SD
+      myprintf("SD | BP presse ou limite (1500) atteinte, arrêt de la journalisation.\r\n");
       break;  
     }
   }
