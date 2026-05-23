@@ -68,7 +68,8 @@ FATFS FatFs; 	//Fatfs handle
 FIL fil; 		//File handle
 FRESULT fres; //Result after operations
 
-volatile uint8_t stop_logging = 0; // pour le BP d'arrêt d'urgence
+volatile uint8_t stop_logging = 0; // pour le BP d'arrêt et de reprise de l'acquisition
+volatile uint8_t prev_stop_logging = 0; // pour détecter les changements d'état du flag
 volatile uint32_t CTOP = 0; //Compteur de mesures pour limiter le nombre de fichiers créés sur la carte SD
 
 /*------------Pour le gyroscope ICM20948------------*/
@@ -101,7 +102,7 @@ void myprintf(const char *fmt, ...);
 void draw_compass(float angle_degrees);
 void draw_artificial_horizon(float pitch, float roll);
 uint32_t calcul_rapport_cyclique(float yaw);
-//--------------- Fonctions pour l'ARINC 429 ---------------
+// Fonctions pour l'ARINC 429 
 uint8_t inversion_byte(uint8_t byte);
 int count_set_bits(uint32_t n);
 uint32_t generate_arinc_word(uint32_t pressure, uint8_t label);
@@ -405,11 +406,31 @@ int main(void)
   __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, rapport_cyclique); //Initialisation à 1.5 ms, position neutre pour le servo
 
   /*------------------------------------------
-    Message ARINC 429 
+  Message ARINC 429 
   --------------------------------------------*/
   //l'ARINC utilise l'octal pour le label ! Source : Wiki
   uint32_t mesg_arinc = 0 ;
   uint8_t label_arinc = 0xAE; //256 en octal, 174 en décimal, 0xAE en hexadécimal
+
+  /*------------------------------------------
+  Mise en place d'une LED pour signaler le mode "arrêt" de l'acquisition 
+  -------------------------------------------*/
+  // ~~~ Mode register : MODER ~~~
+  GPIOA->MODER &= ~(0b11 << 22); // Reset state pour le pin 11; << 22 car pin 11 mais 2 bits par pin dans le registre MODER
+  GPIOA->MODER |= 0b01 << 22; // Mise du pin 11 en mode "output" pour piloter la LED
+  // ~~~ Output type register : OTYPER ~~~
+  //Mise du pin 11 en "push-pull" pour un signal stable; <<11 car 1 bit/pin dans l'OTYPER
+  GPIOA->OTYPER &= ~(0b1 << 11);
+  // ~~~ Output speed register : OSPEEDR ~~~
+  // Low speed car c'est une LED, pas besoin de haute fréquence, et ça évite les interférences électromagnétiques
+  GPIOA->OSPEEDR &= ~(0b11 << 22);
+  // ~~~ Pull-up/pull-down register : PUPDR ~~~
+  // Pas de pull-up ni pull-down pour une sortie LED, une résistance est physiquement présente sur mon circuit
+  GPIOA->PUPDR &= ~(0b11 << 22);
+  // ~~~ Set/reset register : BSRR ~~~
+  // Dans le BSRR, il y a le BR pour le reset et le BS pour le set. Un bit = 0 veut dire qu'il ne fait rien ("no action")
+  // Le BR est mis à 1 pour éteindre la LED, le BS n'est pas utilisé, il reste à 0 pour ne pas allumer la LED
+  GPIOA->BSRR = (0b1 << 27);
 
   /* USER CODE END 2 */
 
@@ -420,129 +441,140 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-  if (HAL_GetTick() - last_tick >= 200) 
-  { //Acquisition toutes les 200ms
-    last_tick = HAL_GetTick(); //Reset du timer pour la prochaine acquisition
+    if (HAL_GetTick() - last_tick >= 200) 
+    { //Acquisition toutes les 200ms
+      last_tick = HAL_GetTick(); //Reset du timer pour la prochaine acquisition
 
-    /*------------------------------------------
-    Partie gyroscope ICM20948
-    --------------------------------------------*/
-    //Le capteur de temperature et de pression BMP208
-    BME280_Measure(&temp,&press);
-    
-    //Le capteur de mouvement ICM20948 (gyroscope, accéléromètre et magnétomètre)
-    icm20948_gyro_read(& gyrodata);
-    icm20948_accel_read(& acceldata);
-    ak09916_mag_read(& magdata); 
-    mx = magdata.x - MAG_OFFSET_X;
-    my = magdata.y - MAG_OFFSET_Y;
-    mz = magdata.z - MAG_OFFSET_Z;
-    // Calcul des angles
-    pitch_rad = atan2(-acceldata.x, sqrt(acceldata.y * acceldata.y + acceldata.z * acceldata.z));
-    roll_rad = atan2(acceldata.y, acceldata.z);
-    pitch = pitch_rad * 180.0 / M_PI;
-    roll = roll_rad * 180.0 / M_PI;
+      if (stop_logging != prev_stop_logging) 
+      {
+        if (prev_stop_logging == 0) {
+          GPIOA->BSRR = (0b1 << 11); //LED éteinte en mode acquisition
+          myprintf("Systeme | Acquisition en PAUSE\r\n");
+        } else {
+          GPIOA->BSRR = (0b1 << 27); //LED allumée en mode pause
+          myprintf("Systeme | Acquisition REPRISE\r\n");
+        }
+        prev_stop_logging = stop_logging;
+      }
 
-    mag_x_comp = mx * cos(pitch_rad) + mz * sin(pitch_rad);
-    mag_y_comp = mx * sin(roll_rad) * sin(pitch_rad) + my * cos(roll_rad) - mz * sin(roll_rad) * cos(pitch_rad);
-    yaw = atan2(mag_y_comp, mag_x_comp) * 180.0 / M_PI;
+      if (stop_logging == 0){
+        /*------------------------------------------
+        Partie gyroscope ICM20948
+        --------------------------------------------*/
+        //Le capteur de temperature et de pression BMP208
+        BME280_Measure(&temp,&press);
+        
+        //Le capteur de mouvement ICM20948 (gyroscope, accéléromètre et magnétomètre)
+        icm20948_gyro_read(& gyrodata);
+        icm20948_accel_read(& acceldata);
+        ak09916_mag_read(& magdata); 
+        mx = magdata.x - MAG_OFFSET_X;
+        my = magdata.y - MAG_OFFSET_Y;
+        mz = magdata.z - MAG_OFFSET_Z;
+        // Calcul des angles
+        pitch_rad = atan2(-acceldata.x, sqrt(acceldata.y * acceldata.y + acceldata.z * acceldata.z));
+        roll_rad = atan2(acceldata.y, acceldata.z);
+        pitch = pitch_rad * 180.0 / M_PI;
+        roll = roll_rad * 180.0 / M_PI;
 
-    /*------------------------------------------
-    Partie message ARINC 429 pour la pression, à envoyer par UART et dans la microSD
-    --------------------------------------------*/
-    uint32_t press_dec = press * 100; //Pression*100 pour avoir les deux décimales
-    mesg_arinc = generate_arinc_word(press_dec, label_arinc); 
+        mag_x_comp = mx * cos(pitch_rad) + mz * sin(pitch_rad);
+        mag_y_comp = mx * sin(roll_rad) * sin(pitch_rad) + my * cos(roll_rad) - mz * sin(roll_rad) * cos(pitch_rad);
+        yaw = atan2(mag_y_comp, mag_x_comp) * 180.0 / M_PI;
 
-    /*------------------------------------------
-    Partie affichage Terminal Serie
-    --------------------------------------------*/
-    myprintf("Serial Terminal | T: %.2f C, P: %.2f hPa \r\n", temp, press);
-    myprintf("Message ARINC | 0x%08lX\r\n", mesg_arinc); //%08lX repasse en hexadécimal long pour l'affichage, plus lisible pour un message binaire
-    myprintf("Gyro (dps) | X: %.2f, Y: %.2f, Z: %.2f\r\n", gyrodata.x, gyrodata.y, gyrodata.z);
-    myprintf("Accel (g) | X: %.2f, Y: %.2f, Z: %.2f\r\n", acceldata.x, acceldata.y, acceldata.z);
-    myprintf("Mag (uT) | X: %.2f, Y: %.2f, Z: %.2f\r\n", magdata.x, magdata.y, magdata.z); 
+        /*------------------------------------------
+        Partie message ARINC 429 pour la pression, à envoyer par UART et dans la microSD
+        --------------------------------------------*/
+        uint32_t press_dec = press * 100; //Pression*100 pour avoir les deux décimales
+        mesg_arinc = generate_arinc_word(press_dec, label_arinc); 
 
-    /*------------------------------------------
-    Partie affichage Écran OLED
-    --------------------------------------------*/
-    ssd1306_Fill(Black);
+        /*------------------------------------------
+        Partie affichage Terminal Serie
+        --------------------------------------------*/
+        myprintf("Serial Terminal | T: %.2f C, P: %.2f hPa \r\n", temp, press);
+        myprintf("Message ARINC | 0x%08lX\r\n", mesg_arinc); //%08lX repasse en hexadécimal long pour l'affichage, plus lisible pour un message binaire
+        myprintf("ICM-20948 | Lacet : %.2f°\r\n", yaw);
+        myprintf("ICM-20948 | Tagage : %.2f°\r\n", pitch);
+        myprintf("ICM-20948 | Roulis : %.2f°\r\n", roll);
 
-    ssd1306_SetCursor(2, 0);
-    char strPress[20];
-    sprintf(strPress, "P: %.2f hPa", press);
-    ssd1306_WriteString(strPress, Font_7x10, White);
-    
-    ssd1306_SetCursor(2, 10);
-    char strTemp[20];
-    sprintf(strTemp, "T: %.2f C", temp);
-    ssd1306_WriteString(strTemp, Font_7x10, White);
+        /*------------------------------------------
+        Partie affichage Écran OLED
+        --------------------------------------------*/
+        ssd1306_Fill(Black);
 
-    draw_compass(yaw);
-    draw_artificial_horizon(pitch, roll);
+        ssd1306_SetCursor(2, 0);
+        char strPress[20];
+        sprintf(strPress, "P: %.2f hPa", press);
+        ssd1306_WriteString(strPress, Font_7x10, White);
+        
+        ssd1306_SetCursor(2, 10);
+        char strTemp[20];
+        sprintf(strTemp, "T: %.2f C", temp);
+        ssd1306_WriteString(strTemp, Font_7x10, White);
 
-    ssd1306_UpdateScreen();
+        draw_compass(yaw);
+        draw_artificial_horizon(pitch, roll);
 
-    /*------------------------------------------
-    Partie écriture sur carte SD
-    --------------------------------------------*/
+        ssd1306_UpdateScreen();
 
-    //Now let's try and write a file "write.txt"
-    fres = f_open(&fil, nom_fichier, FA_WRITE | FA_OPEN_ALWAYS | FA_OPEN_APPEND);
-    if(fres == FR_OK) {
-    myprintf("SD | Ouverture de %s pour écriture\r\n", nom_fichier);
-    } else {
-    myprintf("SD | Erreur f_open (%i)\r\n", fres);
+        /*------------------------------------------
+        Partie écriture sur carte SD
+        --------------------------------------------*/
+
+        //Now let's try and write a file "write.txt"
+        fres = f_open(&fil, nom_fichier, FA_WRITE | FA_OPEN_ALWAYS | FA_OPEN_APPEND);
+        if(fres == FR_OK) {
+        myprintf("SD | Ouverture de %s pour ecriture\r\n", nom_fichier);
+        } else {
+        myprintf("SD | Erreur f_open (%i)\r\n", fres);
+        }
+
+        char line[250];
+        //Copy in a string
+        //Format CSV : "temp;press;etc" car Excel sépare grace au "";"
+        snprintf(line, sizeof(line), "%.2f;%.2f;%.2f;%.2f;%.2f;0x%08lX\r\n", temp, press, yaw, pitch, roll, mesg_arinc);
+        UINT bytesWrote;
+        fres = f_write(&fil, line, strlen(line), &bytesWrote);
+        if(fres == FR_OK) {
+        myprintf("SD | Wrote %i bytes to %s!\r\n", bytesWrote, nom_fichier);
+        } else {
+        myprintf("SD | f_write error (%i)\r\n", fres);
+        }
+
+        //Be a tidy kiwi - don't forget to close your file!
+        f_close(&fil);
+
+        /*------------------------------------------
+        Pilotage servomoteur
+        --------------------------------------------*/
+        rapport_cyclique = calcul_rapport_cyclique(yaw);
+        __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, rapport_cyclique); 
+
+        /*------------------------------------------
+        LEDs d'alterte sur dépassement de seuils (40°) pour le tangage et le roulis
+        --------------------------------------------*/
+        // Vérification du Tangage (Pitch)
+        if (fabs(pitch) > 40.0f) {
+            HAL_GPIO_WritePin(GPIOA, GPIO_pitch_Pin, GPIO_PIN_SET);
+        } else {
+            HAL_GPIO_WritePin(GPIOA, GPIO_pitch_Pin, GPIO_PIN_RESET);
+        }
+        // Vérification du Roulis (Roll)
+        if (fabs(roll) > 40.0f) {
+            HAL_GPIO_WritePin(GPIOA, GPIO_roll_Pin, GPIO_PIN_SET);
+        } else {
+            HAL_GPIO_WritePin(GPIOA, GPIO_roll_Pin, GPIO_PIN_RESET);
+        }
+
+        /*------------------------------------------
+        Limitation du nombre de mesures
+        --------------------------------------------*/
+        CTOP++;
+        if (CTOP > 300) { //On s'arrête après 900 mesures, <=> 3 min d'acquisition pour éviter de remplir la carte SD
+          myprintf("  ~~ limite (1500) atteinte, arrêt de la journalisation ~~  \r\n");
+          break;  
+        }
+      }
     }
-
-    char line[250];
-    //Copy in a string
-    //Format CSV : "temp;press;etc" car Excel sépare grace au "";"
-    snprintf(line, sizeof(line), "%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;0x%08lX\r\n", temp, press, gyrodata.x, gyrodata.y, gyrodata.z, acceldata.x, acceldata.y, acceldata.z, magdata.x, magdata.y, magdata.z, mesg_arinc);
-    UINT bytesWrote;
-    fres = f_write(&fil, line, strlen(line), &bytesWrote);
-    if(fres == FR_OK) {
-    myprintf("SD | Wrote %i bytes to %s!\r\n", bytesWrote, nom_fichier);
-    } else {
-    myprintf("SD | f_write error (%i)\r\n", fres);
-    }
-
-    //Be a tidy kiwi - don't forget to close your file!
-    f_close(&fil);
-
-    /*------------------------------------------
-    Pilotage servomoteur
-    --------------------------------------------*/
-    rapport_cyclique = calcul_rapport_cyclique(yaw);
-    __HAL_TIM_SET_COMPARE(&htim16, TIM_CHANNEL_1, rapport_cyclique); 
-
-    /*------------------------------------------
-    LEDs d'alterte sur dépassement de seuils (40°) pour le tangage et le roulis
-    --------------------------------------------*/
-    // Vérification du Tangage (Pitch)
-    if (fabs(pitch) > 40.0f) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_pitch_Pin, GPIO_PIN_SET);
-    } else {
-        HAL_GPIO_WritePin(GPIOA, GPIO_pitch_Pin, GPIO_PIN_RESET);
-    }
-
-    // Vérification du Roulis (Roll)
-    if (fabs(roll) > 40.0f) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_roll_Pin, GPIO_PIN_SET);
-    } else {
-        HAL_GPIO_WritePin(GPIOA, GPIO_roll_Pin, GPIO_PIN_RESET);
-    }
-
-    /*------------------------------------------
-    Partie de contrôle d'arrêt d'urgence et de limitation du nombre de mesures
-    --------------------------------------------*/
-
-    CTOP++;
-    if (CTOP > 900 || stop_logging == 1) { //On s'arrête après 900 mesures = 3 min pour éviter de remplir la carte SD
-      myprintf("SD | BP presse ou limite (1500) atteinte, arrêt de la journalisation.\r\n");
-      break;  
-    }
-  }
-  
   }
   //demontage de la carte SD pour éviter les corruptions de données
   f_mount(NULL, "", 0);
@@ -550,7 +582,11 @@ int main(void)
 
   // Bloque le processeur ici indefiniment
   while(1) {
-    HAL_Delay(1000);
+    //LED clignotante pour signaler la fin de l'acquisition
+    GPIOA->BSRR = (0b1 << 11); 
+    HAL_Delay(200);
+    GPIOA->BSRR = (0b1 << 27);
+    HAL_Delay(200);
   }
   /* USER CODE END 3 */
 }
@@ -844,8 +880,16 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-  if(GPIO_Pin == BP_GPIO_EXTI8_Pin) {
-    stop_logging = 1; // On lève le drapeau
+  uint32_t last_BPclick = 0;
+  uint32_t actual_BPclick = 0;
+  if(GPIO_Pin == BP_GPIO_EXTI8_Pin) 
+  {
+    actual_BPclick = HAL_GetTick();
+    if (actual_BPclick - last_BPclick >= 200)
+    {
+      stop_logging = !stop_logging; // Inversion de l'état du flag}
+      last_BPclick = actual_BPclick; // Mise à jour du temps du dernier clic pour éviter les rebonds
+    }
   }
 }
 /* USER CODE END 4 */
