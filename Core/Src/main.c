@@ -441,27 +441,27 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    if (stop_logging != prev_stop_logging) 
+    {
+      if (prev_stop_logging == 0) {
+        GPIOA->BSRR = (0b1 << 11); //LED allumée en mode pause
+        myprintf("Systeme | Acquisition en PAUSE\r\n");
+      } else {
+        GPIOA->BSRR = (0b1 << 27); //LED éteinte en mode acquisition
+        myprintf("Systeme | Acquisition REPRISE\r\n");
+      }
+      prev_stop_logging = stop_logging;
+    }
+
     if (HAL_GetTick() - last_tick >= 200) 
     { //Acquisition toutes les 200ms
       last_tick = HAL_GetTick(); //Reset du timer pour la prochaine acquisition
-
-      if (stop_logging != prev_stop_logging) 
-      {
-        if (prev_stop_logging == 0) {
-          GPIOA->BSRR = (0b1 << 11); //LED éteinte en mode acquisition
-          myprintf("Systeme | Acquisition en PAUSE\r\n");
-        } else {
-          GPIOA->BSRR = (0b1 << 27); //LED allumée en mode pause
-          myprintf("Systeme | Acquisition REPRISE\r\n");
-        }
-        prev_stop_logging = stop_logging;
-      }
 
       if (stop_logging == 0){
         /*------------------------------------------
         Partie gyroscope ICM20948
         --------------------------------------------*/
-        //Le capteur de temperature et de pression BMP208
+        //Le capteur de temperature et de pression BMP280
         BME280_Measure(&temp,&press);
         
         //Le capteur de mouvement ICM20948 (gyroscope, accéléromètre et magnétomètre)
@@ -569,7 +569,7 @@ int main(void)
         Limitation du nombre de mesures
         --------------------------------------------*/
         CTOP++;
-        if (CTOP > 300) { //On s'arrête après 900 mesures, <=> 3 min d'acquisition pour éviter de remplir la carte SD
+        if (CTOP > 100) { //On s'arrête après 900 mesures, <=> 3 min d'acquisition pour éviter de remplir la carte SD
           myprintf("  ~~ limite (1500) atteinte, arrêt de la journalisation ~~  \r\n");
           break;  
         }
@@ -880,7 +880,7 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-  uint32_t last_BPclick = 0;
+  static uint32_t last_BPclick = 0; //statique pour conserver la valeur entre les appels de la fonction, corrigeant ma faute d'anti-rebond
   uint32_t actual_BPclick = 0;
   if(GPIO_Pin == BP_GPIO_EXTI8_Pin) 
   {
