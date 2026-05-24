@@ -569,8 +569,8 @@ int main(void)
         Limitation du nombre de mesures
         --------------------------------------------*/
         CTOP++;
-        if (CTOP > 100) { //On s'arrête après 900 mesures, <=> 3 min d'acquisition pour éviter de remplir la carte SD
-          myprintf("  ~~ limite (1500) atteinte, arrêt de la journalisation ~~  \r\n");
+        if (CTOP > 900) { //On s'arrête après 900 mesures, <=> 3 min d'acquisition pour éviter de remplir la carte SD
+          myprintf("  ~~ limite (900) atteinte, arrêt de la journalisation ~~  \r\n");
           break;  
         }
       }
