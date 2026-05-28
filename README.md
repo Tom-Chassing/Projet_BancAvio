@@ -26,4 +26,4 @@ Projet de système embarqué réalisé dans le cadre du Master 1 CMI IMSAT. Ce b
 * Utilisation conjointe des bibliothèques matérielles **HAL** et d'accès directs aux registres (Bare-metal) pour les GPIOs.
 * Implémentation du middleware **FatFs** pour la gestion du système de fichiers FAT.
 
-Dans le repétoire, vous pouvez lire le rapport technique _CHASSING_Tom_ProjetS8_Banc_Avionique.pdf_.
+Dans le répertoire, vous pouvez lire le rapport technique _CHASSING_Tom_ProjetS8_Banc_Avionique.pdf_.
